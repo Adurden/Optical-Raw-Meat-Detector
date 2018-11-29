@@ -2,6 +2,6 @@ Term Project for CSCI 8820
 
 Authors:
 Andrew Durden
-Logan Jhanke
+Logan Jahnke
 
 Project Description:
