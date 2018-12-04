@@ -25,6 +25,8 @@ using namespace std;
     int _avg_green;
     int _avg_blue;
     
+    int _frame;
+    
     UIViewController<OpenCameraDelegate> * delegate;
     UIImageView * imageView;
     CvVideoCamera * videoCamera;
@@ -145,6 +147,7 @@ using namespace std;
  @return segmented UIImage
  */
 - (UIImage *)threshold:(UIImage *)img {
+    // MARK:- CHANGE ALGORITHM
     // Andrew and Logan's algorithm that reduces input
     // image to one channel (red) and segments from there.
     return [self customTest:img];
@@ -152,12 +155,12 @@ using namespace std;
     // Mogol's algorithm finds the simple browning
     // ratio by comparing raw meat in a certain color range
     // to done meat in another color range.
-    // return [self mogolTest:img];
+//     return [self mogolTest:img];
     
     // Du's algorithm simply uses a pre-segmented image
     // (from Mogol) and then determines the mean redness
     // from the meat to determine the doneness.
-    // return [self duTest:img];
+//     return [self duTest:img];
 }
 
 /**
@@ -200,25 +203,66 @@ using namespace std;
             uchar blue = channels[2].at<uchar>(cv::Point(x,y));
             
             // Subtract green and blue from red
-            int g = green / 2;
-            int b = blue / 2;
+//            int g = green * 0.5;
+//            int b = blue * 0.5;
+//
+//            if ((g > 0) && (b > INT_MAX - g)) {
+//                // Overflow
+//                red = 0;
+//            } else if ((g < 0) && (b < INT_MIN - g)) {
+//                // Underflow, do nothing
+//            } else if (green / 2 + blue / 2 > red) {
+//                // g + b is more than red, resulting in underflow
+//                red = 0;
+//            } else {
+//                red -= g + b;
+//            }
             
-            if ((g > 0) && (b > INT_MAX - g)) {
-                // Overflow
-                red = 0;
-            } else if ((g < 0) && (b < INT_MIN - g)) {
-                // Underflow, do nothing
-            } else if (green / 2 + blue / 2 > red) {
-                // g + b is more than red, resulting in underflow
+            // Subtract blue from red
+            if (red < green) {
+                // Underflow
                 red = 0;
             } else {
-                red -= g + b;
+                red -= green;
             }
         }
     }
     
+    // Create histogram
+    float hranges[] = { 0, 256 };
+    const float* ranges[] = { hranges };
+    int c[] = {0};
+    int bins[] = { 255 };
+    cv::Mat histogram;
+    cv::calcHist(&channels[0], 1, c, cv::Mat(), histogram, 1, bins, ranges, true, false);
+
+    // Find all local mins
+    NSMutableArray *local_mins = [[NSMutableArray alloc]init];
+    for (int b = 1; b < histogram.rows - 1; b++) {
+        float before = histogram.at<float>(cv::Point(0,b - 1));
+        float current = histogram.at<float>(cv::Point(0,b));
+        float after = histogram.at<float>(cv::Point(0,b + 1));
+        if (current < before && current < after) {
+            NSNumber *min = [NSNumber numberWithInt:b];
+            [local_mins addObject:min];
+        }
+    }
+
+    // Find local min closest to 50
+    int min_difference = INT_MAX;
+    int min_threshold = 0;
+    for (int i = 0; i < [local_mins count]; i++) {
+        NSNumber *current = local_mins[i];
+        int difference = abs([current integerValue] - 50);
+        if (difference < min_difference) {
+            min_threshold = [current integerValue];
+            min_difference = difference;
+        }
+    }
+    
     // Threshold for all meat
-    cv::threshold(channels[0], all_meat, 52, 255, cv::THRESH_TOZERO);
+    cv::threshold(channels[0], all_meat, min_threshold, 255, cv::THRESH_TOZERO);
+    cv::threshold(all_meat, all_meat, 200, 255, cv::THRESH_TOZERO_INV);
     
     // Threshold for cooked meat
     cv::threshold(all_meat, uncooked, 80, 255, cv::THRESH_BINARY);
@@ -269,13 +313,23 @@ using namespace std;
  @return the segmented image
  */
 - (UIImage *)duTest:(UIImage *)img {
+    // Reset averages
+    _avg_red = 0;
+    _avg_green = 0;
+    _avg_blue = 0;
+    
     // Get original
     cv::Mat original;
     UIImageToMat(img, original);
     
     // Get segmented
     cv::Mat segmented;
-    UIImageToMat([self mogolTest:img], segmented);
+    
+    // Use Mogol
+    UIImageToMat([self customTest:img], segmented);
+    
+    // Use Custom
+//    UIImageToMat([self customTest:img], segmented);
     
     // Determine mean color of segmented pixels
     int number_of_pixels = 0;
@@ -433,6 +487,8 @@ using namespace std;
     delegate = c;
     imageView = iv;
     
+    _frame = 0;
+    
     videoCamera = [[CvVideoCamera alloc] initWithParentView:imageView];
     videoCamera.defaultAVCaptureDevicePosition = AVCaptureDevicePositionBack; // Use the back camera
     videoCamera.defaultAVCaptureVideoOrientation = AVCaptureVideoOrientationPortrait; // Ensure proper orientation
@@ -452,7 +508,16 @@ using namespace std;
  Called every frame
  */
 - (void)processImage:(cv::Mat &)img {
-    [self du:img];
+    [self mogol:img];
+    
+    // Only update percentages once per second
+    _frame += 1;
+    if (_frame % 30 == 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->delegate updatePercentage];
+        });
+        _frame = 1;
+    }
 }
 
 /**
@@ -484,6 +549,10 @@ using namespace std;
     _total_cooked_pixels = 0;
     _total_uncooked_pixels = 0;
     
+    // Get original
+    cv::Mat result;
+    img.copyTo(result);
+    
     // Split into channels
     vector<cv::Mat> channels;
     cv::split(img, channels);
@@ -499,30 +568,71 @@ using namespace std;
     // Subtract blue and red channels to remove whites
     for (int y = 0; y < img.rows; y++) {
         for (int x = 0; x < img.cols; x++) {
-            uchar &red = channels[2].at<uchar>(cv::Point(x,y));
+            uchar &red = channels[0].at<uchar>(cv::Point(x,y));
             uchar green = channels[1].at<uchar>(cv::Point(x,y));
-            uchar blue = channels[0].at<uchar>(cv::Point(x,y));
+            uchar blue = channels[2].at<uchar>(cv::Point(x,y));
             
             // Subtract green and blue from red
-            int g = green / 2;
-            int b = blue / 2;
+            //            int g = green * 0.5;
+            //            int b = blue * 0.5;
+            //
+            //            if ((g > 0) && (b > INT_MAX - g)) {
+            //                // Overflow
+            //                red = 0;
+            //            } else if ((g < 0) && (b < INT_MIN - g)) {
+            //                // Underflow, do nothing
+            //            } else if (green / 2 + blue / 2 > red) {
+            //                // g + b is more than red, resulting in underflow
+            //                red = 0;
+            //            } else {
+            //                red -= g + b;
+            //            }
             
-            if ((g > 0) && (b > INT_MAX - g)) {
-                // Overflow
-                red = 0;
-            } else if ((g < 0) && (b < INT_MIN - g)) {
-                // Underflow, do nothing
-            } else if (green / 2 + blue / 2 > red) {
-                // g + b is more than red, resulting in underflow
+            // Subtract blue from red
+            if (red < green) {
+                // Underflow
                 red = 0;
             } else {
-                red -= g + b;
+                red -= green;
             }
         }
     }
     
+    // Create histogram
+    float hranges[] = { 0, 256 };
+    const float* ranges[] = { hranges };
+    int c[] = {0};
+    int bins[] = { 255 };
+    cv::Mat histogram;
+    cv::calcHist(&channels[0], 1, c, cv::Mat(), histogram, 1, bins, ranges, true, false);
+    
+    // Find all local mins
+    NSMutableArray *local_mins = [[NSMutableArray alloc]init];
+    for (int b = 1; b < histogram.rows - 1; b++) {
+        float before = histogram.at<float>(cv::Point(0,b - 1));
+        float current = histogram.at<float>(cv::Point(0,b));
+        float after = histogram.at<float>(cv::Point(0,b + 1));
+        if (current < before && current < after) {
+            NSNumber *min = [NSNumber numberWithInt:b];
+            [local_mins addObject:min];
+        }
+    }
+    
+    // Find local min closest to 50
+    int min_difference = INT_MAX;
+    int min_threshold = 0;
+    for (int i = 0; i < [local_mins count]; i++) {
+        NSNumber *current = local_mins[i];
+        int difference = abs([current integerValue] - 50);
+        if (difference < min_difference) {
+            min_threshold = [current integerValue];
+            min_difference = difference;
+        }
+    }
+    
     // Threshold for all meat
-    cv::threshold(channels[0], all_meat, 52, 255, cv::THRESH_TOZERO);
+    cv::threshold(channels[0], all_meat, min_threshold, 255, cv::THRESH_TOZERO);
+    cv::threshold(all_meat, all_meat, 200, 255, cv::THRESH_TOZERO_INV);
     
     // Threshold for cooked meat
     cv::threshold(all_meat, uncooked, 80, 255, cv::THRESH_BINARY);
@@ -548,9 +658,9 @@ using namespace std;
                 _total_uncooked_pixels++;
             } else if (meat_color[0] > 0) {
                 // Cooked
-                result_color[0] = 0;
+                result_color[0] = 128;
                 result_color[1] = 0;
-                result_color[2] = 128;
+                result_color[2] = 0;
                 _total_cooked_pixels++;
             } else {
                 // Black
@@ -560,10 +670,6 @@ using namespace std;
             }
         }
     }
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self->delegate updatePercentage];
-    });
 }
 
 /**
@@ -574,6 +680,11 @@ using namespace std;
  @param img the frame from the camera
  */
 - (void)du:(cv::Mat &)img {
+    // Reset averages
+    _avg_red = 0;
+    _avg_green = 0;
+    _avg_blue = 0;
+    
     // Get original
     cv::Mat original;
     img.copyTo(original);
@@ -718,10 +829,20 @@ using namespace std;
         }
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self->delegate updatePercentage];
-    });
-    
     img = meat;
+}
+
+/**
+ Edge detector using Canny edge detection
+ 
+ @param img the UIImage to detect edges on
+ @return the edge map
+ */
+- (void)edge:(cv::Mat &)img {
+    // Get edges
+    cv::Mat edges;
+    cv::Canny(img, edges, 100, 200);
+    cv::cvtColor(edges, edges, cv::COLOR_GRAY2BGR);
+    img = edges;
 }
 @end
