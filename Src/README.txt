@@ -4,7 +4,7 @@
 
 REQUIREMENTS:
    - Macbook
-   - Xcode 10 or higher
+   - Xcode 10.*
    - iPhone (if you want to try out the real-time beta)
 
 HOW TO RUN:
@@ -19,6 +19,36 @@ HOW TO RUN:
 QUESTIONS?
 jahnke@uga.edu
 
-========================================
-|           Python Scripts             |
-========================================
+==============================================
+|           meat_finding_final.py             |
+==============================================
+
+REQUIREMENTS:
+  - Python 3.*
+    - argparse 1.1
+    - joblib 0.12.5
+    - numpy 1.14.3
+    - skimage 0.13.1
+    - scipy 1.1.0
+    - imageio 2.3.0
+
+HOW TO RUN:
+  - in terminal "python meat_finding_final.py [flags]"
+  HELP MESSAGE:
+  -h, --help            show this help message and exit
+  -i INPUT, --input INPUT
+                      relative path to a image file or directory of frames.
+  -o OUTPUT, --output OUTPUT
+                      Destination path for masks. [DEFAULT: cwd]
+  -x MAX_SEED, --max_seed MAX_SEED
+                      max threshold seed. [DEFAULT: 200]
+  -n MIN_SEED, --min_seed MIN_SEED
+                      min threshold seed. [DEFAULT: 40]
+  -c, --convex_hull     If set, convex_hull will be applied to output masks
+                      [DEFAULT: False]
+  --n_jobs N_JOBS       Degree of parallelism for reading in videos. -1 is all
+                      cores. [DEFAULT -1]
+
+OUTPUT:
+  This program will output a png for each image passed into which where the
+  meat pixels are 1 and the background pixels are 0
