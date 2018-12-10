@@ -9,7 +9,7 @@ def make_mask(im_file):
     mask = np.zeros_like(im[:, :, 0])
     mask[im[:, :, 1] == 128] = 2
     mask[im[:, :, 2] == 128] = 1
-
+    imageio.imwrite()
     return mask
 
 
